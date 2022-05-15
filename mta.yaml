@@ -1,0 +1,140 @@
+_schema-version: "3.1"
+ID: maps
+description: A simple CAP project.
+version: 1.0.0
+modules:
+  - name: maps-srv
+    type: nodejs
+    path: gen/srv
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}/catalog
+    parameters:
+      buildpack: nodejs_buildpack
+    build-parameters:
+      builder: npm-ci
+    requires:
+      - name: maps-db
+      - name: uaa_maps
+  - name: maps-destination-content
+    type: com.sap.application.content
+    requires:
+      - name: maps-destination-service
+        parameters:
+          content-target: true
+      - name: maps_html_repo_host
+        parameters:
+          service-key:
+            name: maps_html_repo_host-key
+      - name: uaa_maps
+        parameters:
+          service-key:
+            name: uaa_maps-key
+    parameters:
+      content:
+        instance:
+          destinations:
+            - Name: maps_maps_html_repo_host
+              ServiceInstanceName: maps-html5-app-host-service
+              ServiceKeyName: maps_html_repo_host-key
+              sap.cloud.service: maps
+            - Authentication: OAuth2UserTokenExchange
+              Name: maps_uaa_maps
+              ServiceInstanceName: maps-xsuaa-service
+              ServiceKeyName: uaa_maps-key
+              sap.cloud.service: maps
+          existing_destinations_policy: ignore
+    build-parameters:
+      no-source: true
+
+  - name: maps-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: maps-db
+  - name: maps-ui-deployer
+    type: com.sap.application.content
+    path: .
+    requires:
+    - name: maps_html_repo_host
+      parameters:
+        content-target: true
+    build-parameters:
+      build-result: resources
+      requires:
+      - artifacts:
+        - locationui-content.zip
+        name: locationui
+        target-path: resources/ 
+  - name: locationui
+    type: html5
+    path: app/locationui
+    build-parameters:
+      builder: custom
+      commands:
+      - npm install
+      - npm run build
+      supported-platforms: []
+    requires:
+      - name: uaa_maps
+resources:
+  - name: maps-destination-service
+    type: org.cloudfoundry.managed-service
+    parameters:
+      config:
+        HTML5Runtime_enabled: true
+        init_data:
+          subaccount:
+            destinations:
+              - Authentication: NoAuthentication
+                HTML5.DynamicDestination: true
+                HTML5.ForwardAuthToken: true
+                Name: maps_destination_srv
+                ProxyType: Internet
+                Type: HTTP
+                URL: '~{srv-api/srv-url}'
+                WebIDEAdditionalData: full_url
+                WebIDEEnabled: true
+                WebIDEUsage: odata_gen
+            existing_destinations_policy: update
+        version: 1.0.0
+      service: destination
+      service-name: maps-destination-service
+      service-plan: lite
+    requires:
+    - name: srv-api  
+  - name: maps_html_repo_host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-name: maps-html5-app-host-service
+      service-plan: app-host
+  - name: uaa_maps
+    type: org.cloudfoundry.managed-service
+    parameters:
+      path: ./xs-security.json
+      service: xsuaa
+      service-name: maps-xsuaa-service
+      service-plan: application
+      config:
+        xsappname: maps-${org}-${space}
+        tenant-mode: dedicated
+
+  - name: maps-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana # or 'hanatrial' on trial landscapes
+      service-plan: hdi-shared
+    properties:
+      hdi-service-name: ${service-name}
+parameters:
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx -p @sap/cds-dk cds build --production
